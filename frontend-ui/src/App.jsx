@@ -18,6 +18,7 @@ export default function App() {
   const [logbooks, setLogbooks] = useState({}); // date -> svg
   const [logbooksLoading, setLogbooksLoading] = useState(false);
   const [triedSubmit, setTriedSubmit] = useState(false);
+  const [apiError, setApiError] = useState(null);
 
   const onChange = (e) => {
     const { name, value } = e.target;
@@ -43,40 +44,51 @@ export default function App() {
 
   const isValid = useMemo(() => Object.keys(validate(form)).length === 0, [form]);
 
-  const onSubmit = async (e) => {
-    e.preventDefault();
-    setTriedSubmit(true);
+const onSubmit = async (e) => {
+  e.preventDefault();
+  setTriedSubmit(true);
+  setApiError(null);
+  setErrors({});
 
-    const v = validate(form);
-    setErrors(v);
-    setTouched({
-      current_location: true,
-      pickup_location: true,
-      dropoff_location: true,
-      current_cycle_used_hours: true,
+  const v = validate(form);
+  setErrors(v);
+  setTouched({
+    current_location: true,
+    pickup_location: true,
+    dropoff_location: true,
+    current_cycle_used_hours: true,
+  });
+  if (Object.keys(v).length) return;
+
+  setLoading(true);
+  setTrip(null);
+  setLogbooks({});
+  try {
+    const data = await planTrip({
+      current_location: form.current_location.trim(),
+      pickup_location: form.pickup_location.trim(),
+      dropoff_location: form.dropoff_location.trim(),
+      current_cycle_used_hours: Number(form.current_cycle_used_hours),
+      // start_time_iso: form.start_time_iso,
     });
-    if (Object.keys(v).length) return;
-
-    setLoading(true);
-    setTrip(null);
-    setLogbooks({});
-    try {
-      const data = await planTrip({
-        current_location: form.current_location.trim(),
-        pickup_location: form.pickup_location.trim(),
-        dropoff_location: form.dropoff_location.trim(),
-        current_cycle_used_hours: Number(form.current_cycle_used_hours),
-        // ...(form.start_time_iso ? { start_time_iso: form.start_time_iso } : {}),
-      });
-      setTrip(data);
-    } catch (err) {
-      alert(err.message || "Request failed");
-    } finally {
-      setLoading(false);
+    setTrip(data);
+  } catch (err) {
+    if (err.status === 400 && err.body && typeof err.body === "object") {
+      const serverErrs = {};
+      for (const [k, vMsgs] of Object.entries(err.body)) {
+        if (Array.isArray(vMsgs) && vMsgs.length) serverErrs[k] = vMsgs[0];
+      }
+      setErrors((prev) => ({ ...prev, ...serverErrs }));
+      setTouched((t) => ({ ...t, ...Object.fromEntries(Object.keys(serverErrs).map(k => [k, true])) }));
+    } else {
+      const detail = err?.body?.detail || err.message || "Something went wrong. Please try again.";
+      setApiError(detail);
     }
-  };
+  } finally {
+    setLoading(false);
+  }
+};
 
-  // Fetch SVGs for each day once trip is available
   useEffect(() => {
     const run = async () => {
       if (!trip?.days?.length) return;
@@ -205,7 +217,10 @@ export default function App() {
               {loading ? "Planning..." : "Plan Trip"}
             </button>
 
-            {/* Only after an attempted submit and invalid form */}
+            {apiError && (
+              <p className="text-sm text-red-600">{apiError}</p>
+            )}
+
             {triedSubmit && !isValid && (
               <p className="text-sm text-red-600">Fill all required fields</p>
             )}

@@ -8,6 +8,7 @@ from .serializers import PlanTripInput
 from .routing import geocode_place, osrm_route, point_on_polyline
 from .hos import plan_schedule, parse_start_time
 from .logbook import render_svg, normalize_segments
+from rest_framework.exceptions import ValidationError
 
 STATE_ABBR = {
     "Alabama":"AL","Alaska":"AK","Arizona":"AZ","Arkansas":"AR","California":"CA","Colorado":"CO",
@@ -123,14 +124,37 @@ def plan_trip(request):
     ser.is_valid(raise_exception=True)
     data = ser.validated_data
 
+    errors = {}
+
     # geocode
-    cur = geocode_place(data["current_location"])
-    pu  = geocode_place(data["pickup_location"])
-    do  = geocode_place(data["dropoff_location"])
+    try:
+        cur = geocode_place(data["current_location"])
+    except Exception:
+        errors["current_location"] = ["We couldn't find that place. Try 'City, ST' (e.g., 'Dallas, TX')."]
+
+    try:
+        pu  = geocode_place(data["pickup_location"])
+    except Exception:
+        errors["pickup_location"] = ["We couldn't find the pickup location. Try 'City, ST' or a full address."]
+
+    try:
+        do  = geocode_place(data["dropoff_location"])
+    except Exception:
+        errors["dropoff_location"] = ["We couldn't find the dropoff location. Try 'City, ST' or a full address."]
+
+    if errors:
+        raise ValidationError(errors)
 
     # build route current->pickup->dropoff
     points = [(cur["lng"], cur["lat"]), (pu["lng"], pu["lat"]), (do["lng"], do["lat"])]
-    route = osrm_route(points)
+    
+    try:
+        route = osrm_route(points)
+    except Exception:
+        return Response(
+            {"detail": "We couldn't compute a route between those locations. Please try again."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
 
     # HOS plan
     start_dt = parse_start_time(data.get("start_time_iso"))

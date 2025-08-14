@@ -6,16 +6,25 @@ export async function planTrip(payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!r.ok) throw new Error(`planTrip failed: ${r.status}`);
-  return r.json();
+
+  const ct = r.headers.get("content-type") || "";
+  const body = ct.includes("application/json") ? await r.json() : await r.text();
+
+  if (!r.ok) {
+    const err = new Error("Request failed");
+    err.status = r.status;
+    err.body = body;
+    throw err;
+  }
+  return body;
 }
 
 export async function renderLogbookSVG(payload) {
-  const res = await fetch(`${BASE}/api/logbook/`, {
+  const r = await fetch(`${BASE}/api/logbook/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error(`renderLogbook failed: ${res.status}`);
-  return await res.text(); // SVG string
+  if (!r.ok) throw new Error(`renderLogbook failed: ${r.status}`);
+  return await r.text();
 }

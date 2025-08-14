@@ -97,10 +97,7 @@ def normalize_segments(segments: List[Dict]) -> List[Dict]:
     return out
 
 def render_svg(day_date: str, segments: List[Dict], labels: List[Dict]=None) -> str:
-    """
-    segments: [{status, from, to}] times as "HH:MM" 24h.
-    Returns SVG string.
-    """
+
     segments = normalize_segments(segments)
 
     width, height = 1000, 320
@@ -150,34 +147,53 @@ def render_svg(day_date: str, segments: List[Dict], labels: List[Dict]=None) -> 
     if labels:
         grid_bottom = height - mb
 
-        by_time: Dict[str, List[Dict]] = {}
+        def priority(lab: Dict) -> int:
+            t = (lab.get("text", "") or "").lower()
+            if "30-min break" in t or "30 min break" in t:
+                return 0
+            if "fuel" in t:
+                return 1
+            if "pre-trip" in t or "pickup" in t:
+                return 2
+            if "post-trip" in t or "dropoff" in t:
+                return 3
+            return 4
+
+        def extra_y_for(lab: Dict) -> int:
+            """Force Fuel labels to sit one row lower even if grouping fails."""
+            t = (lab.get("text", "") or "").lower()
+            return 26 if "fuel" in t else 0
+
+        entries = []
         for lab in labels:
-            by_time.setdefault(lab["time"], []).append(lab)
+            hh, mm = map(int, lab["time"].split(":"))
+            minutes = _quant_min(hh * 60 + mm)
+            x = x_of(_min_to_hhmm(minutes))
+            entries.append({"lab": lab, "x": x})
 
-        for time in sorted(by_time.keys()):
-            group = by_time[time]
-            base_x = x_of(time)
-
-            n = len(group)
-            step = 18
-            if n == 1:
-                offsets = [0]
-            elif n == 2:
-                offsets = [-step//2, +step//2]
-            elif n == 3:
-                offsets = [-step, 0, +step]
+        entries.sort(key=lambda e: e["x"])
+        CLUSTER_PX = 10
+        clusters: List[List[Dict]] = []
+        for e in entries:
+            if not clusters or abs(e["x"] - clusters[-1][-1]["x"]) > CLUSTER_PX:
+                clusters.append([e])
             else:
-                half = n // 2
-                offsets = [ (i - half) * (step // 1) for i in range(n) ]
+                clusters[-1].append(e)
 
-            for (lab, dx) in zip(group, offsets):
-                x = base_x + dx
+        row_gap = 20
+        for cluster in clusters:
+            cluster.sort(key=lambda e: priority(e["lab"]))
+            for row, e in enumerate(cluster):
+                lab = e["lab"]
+                x = round(e["x"]) + 0.5
+
                 parts.append(
                     f'<line x1="{x}" y1="{grid_bottom-50}" x2="{x}" y2="{grid_bottom}" '
                     f'stroke="#9aa0a6" stroke-width="1" stroke-dasharray="2,2"/>'
                 )
+
                 lines = _wrap_text(lab.get("text", ""), max_len=24, max_lines=2)
-                base_y = grid_bottom + 14
+                base_y = grid_bottom + 14 + row * row_gap + extra_y_for(lab)
                 for i, line in enumerate(lines):
                     y = base_y + i * 12
                     parts.append(
