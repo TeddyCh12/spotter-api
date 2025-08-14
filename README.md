@@ -82,7 +82,7 @@ A full-stack app that takes trip details as inputs and outputs route instruction
     "cycle_max_hours": 70.0,
     "cycle_exceeded": false
   },
-  "places": { "current": {..}, "pickup": {..}, "dropoff": {..} },
+  "places": { "current": {"..."}, "pickup": {"..."}, "dropoff": {"..."} },
   "stops": [
     { "type":"pickup_on_duty","at_iso":"...","duration_min":60 },
     { "type":"break_30min","at_iso":"...","duration_min":30 },
@@ -103,7 +103,7 @@ A full-stack app that takes trip details as inputs and outputs route instruction
         {"time":"...","text":"30-min break"},
         {"time":"...","text":"Fuel stop"}
       ],
-      "totals": {"OFF":..., "SB":..., "D":..., "ON":...}
+      "totals": {"OFF":"...", "SB":"...", "D":"...", "ON":"..."}
     }
   ]
 }
