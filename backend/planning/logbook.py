@@ -1,12 +1,20 @@
 from typing import List, Dict
 
-LANES = ["OFF", "SB", "D", "ON"]  # top→bottom
+LANES = ["OFF", "SB", "D", "ON"]
+
+QUANT_MIN = 5
+MIN_SEG_MIN = 3
 
 def _hhmm_to_min(hhmm: str) -> int:
     if hhmm == "24:00":
         return 24 * 60
     hh, mm = map(int, hhmm.split(":"))
     return max(0, min(24*60, hh * 60 + mm))
+
+def _quant_min(m: int) -> int:
+    """Snap minutes to the nearest QUANT_MIN (e.g., 5-min bins)."""
+    q = int(round(m / QUANT_MIN) * QUANT_MIN)
+    return max(0, min(24*60, q))
 
 def _min_to_hhmm(m: int) -> str:
     m = max(0, min(24*60, m))
@@ -27,7 +35,6 @@ def _wrap_text(s: str, max_len: int = 24, max_lines: int = 2):
             break
     if line and len(out) < max_lines:
         out.append(line)
-    # ellipsis if we still truncated
     joined = " ".join(words)
     if " ".join(out) != joined and len(out) == max_lines:
         out[-1] = (out[-1][:-1] + "…") if len(out[-1]) >= 2 else "…"
@@ -36,27 +43,17 @@ def _wrap_text(s: str, max_len: int = 24, max_lines: int = 2):
 def _escape(s: str) -> str:
     return (s or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
-
 def normalize_segments(segments: List[Dict]) -> List[Dict]:
-    """
-    Normalize a day's segments to fully cover 00:00..24:00.
-    - Split segments that pass midnight into two pieces.
-    - Trim overlaps.
-    - Fill gaps with OFF.
-    - Merge adjacent segments with the same status.
-    """
     parsed = []
     for s in (segments or []):
         st = s["status"]
-        start = _hhmm_to_min(s["from"])
-        end   = _hhmm_to_min(s["to"])
+        start = _quant_min(_hhmm_to_min(s["from"]))
+        end   = _quant_min(_hhmm_to_min(s["to"]))
 
-        if end == start:
-            # zero-length, ignore
+        if end <= start or (end - start) < MIN_SEG_MIN:
             continue
 
         if end < start:
-            # spans midnight -> split into [start..24:00] and [00:00..end]
             parsed.append((start, 24 * 60, st))
             parsed.append((0, end, st))
         else:
@@ -68,13 +65,11 @@ def normalize_segments(segments: List[Dict]) -> List[Dict]:
     last_end = 0
 
     for start, end, status in parsed:
-        # trim overlap
         if start < last_end:
             start = last_end
         if start >= end:
             continue
 
-        # fill any gap with OFF
         if start > last_end:
             out.append({
                 "status": "OFF",
@@ -82,7 +77,6 @@ def normalize_segments(segments: List[Dict]) -> List[Dict]:
                 "to": _min_to_hhmm(start),
             })
 
-        # merge if same lane touches
         if out and out[-1]["status"] == status and out[-1]["to"] == _min_to_hhmm(start):
             out[-1]["to"] = _min_to_hhmm(end)
         else:
@@ -94,11 +88,9 @@ def normalize_segments(segments: List[Dict]) -> List[Dict]:
 
         last_end = end
 
-    # trailing OFF to midnight
     if last_end < 24 * 60:
         out.append({"status": "OFF", "from": _min_to_hhmm(last_end), "to": "24:00"})
 
-    # no input segments -> whole day OFF
     if not parsed and not segments:
         out = [{"status": "OFF", "from": "00:00", "to": "24:00"}]
 
@@ -109,7 +101,6 @@ def render_svg(day_date: str, segments: List[Dict], labels: List[Dict]=None) -> 
     segments: [{status, from, to}] times as "HH:MM" 24h.
     Returns SVG string.
     """
-    # ✅ normalize to full-day first
     segments = normalize_segments(segments)
 
     width, height = 1000, 320
@@ -117,40 +108,41 @@ def render_svg(day_date: str, segments: List[Dict], labels: List[Dict]=None) -> 
     inner_w = width - ml - mr
     lane_h = (height - mt - mb) / (len(LANES) - 1)
 
+    def _px(x: float) -> float:
+        return round(x) + 0.5
+
     def x_of(hhmm: str) -> float:
         hh, mm = map(int, hhmm.split(":"))
-        minutes = hh * 60 + mm
-        return ml + inner_w * (minutes / 1440.0)
+        minutes = _quant_min(hh * 60 + mm)
+        x = ml + inner_w * (minutes / 1440.0)
+        return _px(x)
 
     def y_of(status: str) -> float:
         idx = LANES.index(status)
-        return mt + lane_h * idx
+        return _px(mt + lane_h * idx)
 
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">']
     parts.append(f'<rect x="0" y="0" width="{width}" height="{height}" fill="white" stroke="#ddd"/>')
 
-    # vertical hour lines + labels
     for h in range(25):
-        x = ml + inner_w * (h / 24.0)
+        x = _px(ml + inner_w * (h / 24.0))
         parts.append(f'<line x1="{x}" y1="{mt-10}" x2="{x}" y2="{height-mb}" stroke="#e5e5e5" stroke-width="1"/>')
         if h < 24:
             parts.append(f'<text x="{x+2}" y="{mt-15}" font-size="10" fill="#555">{h:02d}</text>')
 
-    # horizontal lanes + labels
     for st in LANES:
         y = y_of(st)
         parts.append(f'<line x1="{ml}" y1="{y}" x2="{width-mr}" y2="{y}" stroke="#bbb" stroke-width="1.5"/>')
         parts.append(f'<text x="10" y="{y+4}" font-size="12" fill="#333">{st}</text>')
 
-    # thick duty lines with vertical connectors
     last_x = None
     last_y = None
     for seg in segments:
         st = seg["status"]
         x1 = x_of(seg["from"])
-        x2 = x_of(seg["to"]) if seg["to"] != "24:00" else ml + inner_w
+        x2 = x_of(seg["to"]) if seg["to"] != "24:00" else _px(ml + inner_w)
         y  = y_of(st)
-        if last_x is not None and abs(x1 - last_x) < 1e-6 and last_y is not None and abs(y - last_y) > 1e-6:
+        if last_x is not None and abs(x1 - last_x) < 0.51 and last_y is not None and abs(y - last_y) > 0.51:
             parts.append(f'<line x1="{x1}" y1="{last_y}" x2="{x1}" y2="{y}" stroke="black" stroke-width="3"/>')
         parts.append(f'<line x1="{x1}" y1="{y}" x2="{x2}" y2="{y}" stroke="black" stroke-width="3"/>')
         last_x, last_y = x2, y
@@ -158,25 +150,41 @@ def render_svg(day_date: str, segments: List[Dict], labels: List[Dict]=None) -> 
     if labels:
         grid_bottom = height - mb
 
+        by_time: Dict[str, List[Dict]] = {}
         for lab in labels:
-            x = x_of(lab["time"])
+            by_time.setdefault(lab["time"], []).append(lab)
 
-            # subtle dashed guide from grid to axis
-            parts.append(
-                f'<line x1="{x}" y1="{grid_bottom-50}" x2="{x}" y2="{grid_bottom}" '
-                f'stroke="#9aa0a6" stroke-width="1" stroke-dasharray="2,2"/>'
-            )
+        for time in sorted(by_time.keys()):
+            group = by_time[time]
+            base_x = x_of(time)
 
-            # wrap to two short lines and draw centered at x
-            lines = _wrap_text(lab.get("text", ""), max_len=24, max_lines=2)
-            base_y = grid_bottom + 14
-            for i, line in enumerate(lines):
-                y = base_y + i * 12
+            n = len(group)
+            step = 18
+            if n == 1:
+                offsets = [0]
+            elif n == 2:
+                offsets = [-step//2, +step//2]
+            elif n == 3:
+                offsets = [-step, 0, +step]
+            else:
+                half = n // 2
+                offsets = [ (i - half) * (step // 1) for i in range(n) ]
+
+            for (lab, dx) in zip(group, offsets):
+                x = base_x + dx
                 parts.append(
-                    f'<text x="{x}" y="{y}" text-anchor="middle" font-size="11" fill="#374151">'
-                    f'{_escape(line)}</text>'
+                    f'<line x1="{x}" y1="{grid_bottom-50}" x2="{x}" y2="{grid_bottom}" '
+                    f'stroke="#9aa0a6" stroke-width="1" stroke-dasharray="2,2"/>'
                 )
+                lines = _wrap_text(lab.get("text", ""), max_len=24, max_lines=2)
+                base_y = grid_bottom + 14
+                for i, line in enumerate(lines):
+                    y = base_y + i * 12
+                    parts.append(
+                        f'<text x="{x}" y="{y}" text-anchor="middle" font-size="11" fill="#374151">'
+                        f'{_escape(line)}</text>'
+                    )
 
     parts.append(f'<text x="{ml}" y="{height-12}" font-size="12" fill="#333">Date: {day_date}</text>')
     parts.append('</svg>')
-    return "".join(parts) 
+    return "".join(parts)
