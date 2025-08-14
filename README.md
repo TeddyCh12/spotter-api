@@ -122,7 +122,7 @@ A full-stack app that takes trip details as inputs and outputs route instruction
 ### `POST /api/logbook/`
 **Request JSON**
 ```json
-{ "date":"2025-08-14", "segments":[{ "status":"D","from":"09:00","to":"13:30" }], "labels":[...] }
+{ "date":"2025-08-14", "segments":[{ "status":"D","from":"09:00","to":"13:30" }], "labels":["..."] }
 ```
 **Response**: SVG (as text)
 
